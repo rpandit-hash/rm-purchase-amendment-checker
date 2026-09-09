@@ -1,0 +1,12 @@
+﻿venv/
+.venv/
+__pycache__/
+*.pyc
+.streamlit/
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.xlsx
+*.xls
+*.log

@@ -1,0 +1,16 @@
+{
+  "CR": [
+    {
+      "effective_from": "2026-01-01",
+      "delta_rate": 1.375,
+      "grades": ["D", "EDD", "IF", "IFHS 350", "IFHS 400", "SPC 440", "HSLA 340", "GA*"]
+    }
+  ],
+  "HR": [
+    {
+      "effective_from": "2026-01-01",
+      "delta_rate": 1.5,
+      "grades": ["FE410", "DD1079", "E34", "E38", "BSK 46"]
+    }
+  ]
+}
