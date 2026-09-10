@@ -2,26 +2,20 @@
 RM Purchase Amendment Checker - Backend Logic
 ------------------------------------------------
 Reads a GRN report (raw, row-level export from Cloud9 ERP) and computes
-the correct RM price-revision "Amendment Amount" for every row, using an
-authoritative Delta Rate table (rm_delta_rates.json) instead of a
-manually typed pivot number.
+the RM price-revision "Amendment Amount" for every row, using a single
+current Delta Rate per category (CR / HR) instead of a manually typed
+pivot number.
 
 Rule:
     Amendment Amt (row) = ChallanQty x Delta Rate
 
-    Delta Rate is looked up by:
-        1. Category  -> from the 'Grade' column (CR / HR)
-        2. Quarter    -> the rate entry with the latest 'effective_from'
-                         that is <= the row's GRN_Date
-
-If no rate entry qualifies for a row's date (i.e. GRN_Date is earlier
-than the earliest known effective_from for that category), the row is
-flagged instead of guessed at.
+    Delta Rate is looked up purely by Category (from the row's 'Grade'
+    column: CR or HR). There is one current rate per category - when it's
+    changed, it applies to every row, regardless of date.
 """
 
 import json
 import os
-from datetime import datetime
 
 import pandas as pd
 
@@ -33,112 +27,44 @@ REQUIRED_COLUMNS = [
     "ChallanQty", "Rate", "SubTotal", "Total", "Grade",
 ]
 
-DATE_FORMATS = ("%d/%m/%Y", "%d-%m-%Y", "%Y-%m-%d")
-
 
 def load_rate_table(path: str = RATES_FILE) -> dict:
-    """Load and lightly validate the delta-rate JSON config."""
+    """Load the delta-rate JSON config. Shape: {"CR": {"delta_rate": 1.375, "grades": [...]}, "HR": {...}}"""
     with open(path, "r") as f:
         raw = json.load(f)
 
     table = {}
-    for category, entries in raw.items():
-        parsed = []
-        for e in entries:
-            parsed.append({
-                "effective_from": datetime.strptime(e["effective_from"], "%Y-%m-%d"),
-                "delta_rate": float(e["delta_rate"]),
-                "grades": e.get("grades", []),  # documentation only, not used in lookup
-            })
-        parsed.sort(key=lambda x: x["effective_from"])
-        table[category.upper()] = parsed
+    for category, entry in raw.items():
+        table[category.upper()] = {
+            "delta_rate": float(entry["delta_rate"]),
+            "grades": entry.get("grades", []),  # documentation only, not used in lookup
+        }
     return table
 
 
-def _parse_date(value):
-    if isinstance(value, datetime):
-        return value
-    if pd.isna(value):
-        return None
-    s = str(value).strip()
-    for fmt in DATE_FORMATS:
-        try:
-            return datetime.strptime(s, fmt)
-        except ValueError:
-            continue
-    # last resort: let pandas try
-    try:
-        return pd.to_datetime(s, dayfirst=True).to_pydatetime()
-    except Exception:
-        return None
-
-
 def get_current_rate(rate_table: dict, category: str):
-    """Return the delta rate currently in effect (as of today) for a category, or None."""
-    entries = rate_table.get(str(category).upper())
-    if not entries:
-        return None
-    today = datetime.now()
-    applicable = [e for e in entries if e["effective_from"] <= today]
-    pool = applicable if applicable else entries  # if all entries are future-dated, show the earliest
-    best = max(pool, key=lambda e: e["effective_from"])
-    return best["delta_rate"]
+    """Return the current delta rate for a category, or None."""
+    entry = rate_table.get(str(category).upper())
+    return entry["delta_rate"] if entry else None
 
 
-def save_new_rate(category: str, new_delta_rate: float, effective_from: "datetime.date",
-                   path: str = RATES_FILE) -> None:
-    """
-    Append a new dated rate entry for a category and write it back to
-    rm_delta_rates.json. Old entries are never modified, so historical GRN
-    rows keep resolving to whichever rate was in effect on their own date -
-    only rows from effective_from onward pick up the new rate.
-    """
+def save_new_rate(category: str, new_delta_rate: float, path: str = RATES_FILE) -> None:
+    """Update the current delta rate for a category and write it back to rm_delta_rates.json."""
     category = str(category).upper()
     with open(path, "r") as f:
         raw = json.load(f)
 
-    raw.setdefault(category, [])
-
-    eff_str = effective_from.strftime("%Y-%m-%d") if hasattr(effective_from, "strftime") else str(effective_from)
-
-    # Carry over the grades list from the most recent existing entry, if any, purely for
-    # documentation continuity - it isn't used in the calculation.
-    grades = []
-    if raw[category]:
-        latest = max(raw[category], key=lambda e: e["effective_from"])
-        grades = latest.get("grades", [])
-
-    # If an entry already exists for this exact date, update it in place instead of
-    # creating a duplicate.
-    for entry in raw[category]:
-        if entry["effective_from"] == eff_str:
-            entry["delta_rate"] = float(new_delta_rate)
-            break
-    else:
-        raw[category].append({
-            "effective_from": eff_str,
-            "delta_rate": float(new_delta_rate),
-            "grades": grades,
-        })
-
-    raw[category].sort(key=lambda e: e["effective_from"])
+    raw.setdefault(category, {"grades": []})
+    raw[category]["delta_rate"] = float(new_delta_rate)
 
     with open(path, "w") as f:
         json.dump(raw, f, indent=2)
 
 
-def find_delta_rate(rate_table: dict, category: str, grn_date: datetime):
-    """Return (delta_rate, effective_from) for the applicable quarter, or (None, None)."""
-    entries = rate_table.get(str(category).upper())
-    if not entries or grn_date is None:
-        return None, None
-
-    applicable = [e for e in entries if e["effective_from"] <= grn_date]
-    if not applicable:
-        return None, None
-
-    best = max(applicable, key=lambda e: e["effective_from"])
-    return best["delta_rate"], best["effective_from"]
+def find_delta_rate(rate_table: dict, category: str):
+    """Return the current delta rate for a category, or None if the category is unknown."""
+    entry = rate_table.get(str(category).upper())
+    return entry["delta_rate"] if entry else None
 
 
 DEFAULT_HEADER_ROW = 4  # 1-indexed; GRN exports have 3 title/address rows above the headers
@@ -202,11 +128,9 @@ def find_and_read_header(file, sheet_name: str) -> pd.DataFrame:
 def process_grn_report(df: pd.DataFrame, rate_table: dict) -> pd.DataFrame:
     """
     Take a raw GRN dataframe and append:
-        - GRN_Date_Parsed
         - Delta Rate Used
-        - Rate Effective From
         - Amendment Amt
-        - Flag (blank, or reason string if something's off)
+        - Flag (blank, or reason string if the category is unrecognized)
     """
     df = df.copy()
 
@@ -214,36 +138,22 @@ def process_grn_report(df: pd.DataFrame, rate_table: dict) -> pd.DataFrame:
     if missing:
         raise ValueError(f"GRN report is missing expected column(s): {missing}")
 
-    parsed_dates = df["GRN_Date"].apply(_parse_date)
-    df["GRN_Date_Parsed"] = parsed_dates
-
     delta_rates = []
-    eff_froms = []
     flags = []
 
     for _, row in df.iterrows():
         category = row["Grade"]
-        grn_date = row["GRN_Date_Parsed"]
-
-        if grn_date is None:
-            delta_rates.append(None)
-            eff_froms.append(None)
-            flags.append("Unparseable GRN_Date")
-            continue
 
         if str(category).upper() not in ("CR", "HR"):
             delta_rates.append(None)
-            eff_froms.append(None)
             flags.append(f"Unknown category '{category}'")
             continue
 
-        rate, eff_from = find_delta_rate(rate_table, category, grn_date)
+        rate = find_delta_rate(rate_table, category)
         delta_rates.append(rate)
-        eff_froms.append(eff_from)
-        flags.append("" if rate is not None else "No rate found for this date")
+        flags.append("" if rate is not None else "No rate found for this category")
 
     df["Delta Rate Used"] = delta_rates
-    df["Rate Effective From"] = eff_froms
     df["Amendment Amt"] = df.apply(
         lambda r: round(r["ChallanQty"] * r["Delta Rate Used"], 2)
         if pd.notna(r["Delta Rate Used"]) else None,

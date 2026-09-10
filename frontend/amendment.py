@@ -133,11 +133,9 @@ except Exception as e:
     st.error(f"Could not load rate table ({RATES_FILE}): {e}")
     st.stop()
 
-import datetime as dt
-
 with st.expander("Update Delta Rate"):
     st.caption("Change the CR / HR delta rate here when a new price revision comes in. "
-               "No file editing needed — this updates automatically.")
+               "The new rate applies to every row immediately — no file editing needed.")
 
     rate_col1, rate_col2 = st.columns(2)
 
@@ -148,10 +146,9 @@ with st.expander("Update Delta Rate"):
             "Current CR delta rate", min_value=0.0, value=float(current_cr or 0.0),
             step=0.001, format="%.3f", key="cr_rate_input",
         )
-        cr_eff_date = st.date_input("Effective from", value=dt.date.today(), key="cr_eff_date")
         if st.button("Save CR Rate", key="save_cr"):
-            save_new_rate("CR", new_cr, cr_eff_date)
-            st.success(f"CR delta rate updated to {new_cr} (effective {cr_eff_date}).")
+            save_new_rate("CR", new_cr)
+            st.success(f"CR delta rate updated to {new_cr}.")
             st.rerun()
 
     with rate_col2:
@@ -161,10 +158,9 @@ with st.expander("Update Delta Rate"):
             "Current HR delta rate", min_value=0.0, value=float(current_hr or 0.0),
             step=0.001, format="%.3f", key="hr_rate_input",
         )
-        hr_eff_date = st.date_input("Effective from", value=dt.date.today(), key="hr_eff_date")
         if st.button("Save HR Rate", key="save_hr"):
-            save_new_rate("HR", new_hr, hr_eff_date)
-            st.success(f"HR delta rate updated to {new_hr} (effective {hr_eff_date}).")
+            save_new_rate("HR", new_hr)
+            st.success(f"HR delta rate updated to {new_hr}.")
             st.rerun()
 
 # ---- File upload ----
