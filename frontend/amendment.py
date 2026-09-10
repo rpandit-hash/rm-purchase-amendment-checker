@@ -17,6 +17,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "backend"))
 from amendment_checker import (  # noqa: E402
     RATES_FILE,
     load_rate_table,
+    get_current_rate,
+    save_new_rate,
     pick_grn_sheet,
     find_and_read_header,
     process_grn_report,
@@ -131,21 +133,39 @@ except Exception as e:
     st.error(f"Could not load rate table ({RATES_FILE}): {e}")
     st.stop()
 
-with st.expander("Current Delta Rate table (backend/rm_delta_rates.json)"):
-    for category, entries in rate_table.items():
-        st.write(f"**{category}**")
-        for e in entries:
-            grades_str = ", ".join(e["grades"]) if e.get("grades") else "—"
-            st.write(
-                f"- Effective from {e['effective_from'].date()}: delta rate = {e['delta_rate']} "
-                f"(grades: {grades_str})"
-            )
-    st.info(
-        "To add a new quarter's rates: open backend/rm_delta_rates.json and append a new "
-        "{effective_from, delta_rate, grades} entry under CR and HR. 'grades' is just for "
-        "reference/traceability — it's not used in the calculation, which keys off the "
-        "GRN sheet's CR/HR 'Grade' column. No code changes needed."
-    )
+import datetime as dt
+
+with st.expander("Update Delta Rate"):
+    st.caption("Change the CR / HR delta rate here when a new price revision comes in. "
+               "No file editing needed — this updates automatically.")
+
+    rate_col1, rate_col2 = st.columns(2)
+
+    with rate_col1:
+        st.markdown("**CR Rate**")
+        current_cr = get_current_rate(rate_table, "CR")
+        new_cr = st.number_input(
+            "Current CR delta rate", min_value=0.0, value=float(current_cr or 0.0),
+            step=0.001, format="%.3f", key="cr_rate_input",
+        )
+        cr_eff_date = st.date_input("Effective from", value=dt.date.today(), key="cr_eff_date")
+        if st.button("Save CR Rate", key="save_cr"):
+            save_new_rate("CR", new_cr, cr_eff_date)
+            st.success(f"CR delta rate updated to {new_cr} (effective {cr_eff_date}).")
+            st.rerun()
+
+    with rate_col2:
+        st.markdown("**HR Rate**")
+        current_hr = get_current_rate(rate_table, "HR")
+        new_hr = st.number_input(
+            "Current HR delta rate", min_value=0.0, value=float(current_hr or 0.0),
+            step=0.001, format="%.3f", key="hr_rate_input",
+        )
+        hr_eff_date = st.date_input("Effective from", value=dt.date.today(), key="hr_eff_date")
+        if st.button("Save HR Rate", key="save_hr"):
+            save_new_rate("HR", new_hr, hr_eff_date)
+            st.success(f"HR delta rate updated to {new_hr} (effective {hr_eff_date}).")
+            st.rerun()
 
 # ---- File upload ----
 uploaded = st.file_uploader("Upload GRN Report (.xlsx)", type=["xlsx"])

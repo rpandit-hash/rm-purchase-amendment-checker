@@ -73,6 +73,60 @@ def _parse_date(value):
         return None
 
 
+def get_current_rate(rate_table: dict, category: str):
+    """Return the delta rate currently in effect (as of today) for a category, or None."""
+    entries = rate_table.get(str(category).upper())
+    if not entries:
+        return None
+    today = datetime.now()
+    applicable = [e for e in entries if e["effective_from"] <= today]
+    pool = applicable if applicable else entries  # if all entries are future-dated, show the earliest
+    best = max(pool, key=lambda e: e["effective_from"])
+    return best["delta_rate"]
+
+
+def save_new_rate(category: str, new_delta_rate: float, effective_from: "datetime.date",
+                   path: str = RATES_FILE) -> None:
+    """
+    Append a new dated rate entry for a category and write it back to
+    rm_delta_rates.json. Old entries are never modified, so historical GRN
+    rows keep resolving to whichever rate was in effect on their own date -
+    only rows from effective_from onward pick up the new rate.
+    """
+    category = str(category).upper()
+    with open(path, "r") as f:
+        raw = json.load(f)
+
+    raw.setdefault(category, [])
+
+    eff_str = effective_from.strftime("%Y-%m-%d") if hasattr(effective_from, "strftime") else str(effective_from)
+
+    # Carry over the grades list from the most recent existing entry, if any, purely for
+    # documentation continuity - it isn't used in the calculation.
+    grades = []
+    if raw[category]:
+        latest = max(raw[category], key=lambda e: e["effective_from"])
+        grades = latest.get("grades", [])
+
+    # If an entry already exists for this exact date, update it in place instead of
+    # creating a duplicate.
+    for entry in raw[category]:
+        if entry["effective_from"] == eff_str:
+            entry["delta_rate"] = float(new_delta_rate)
+            break
+    else:
+        raw[category].append({
+            "effective_from": eff_str,
+            "delta_rate": float(new_delta_rate),
+            "grades": grades,
+        })
+
+    raw[category].sort(key=lambda e: e["effective_from"])
+
+    with open(path, "w") as f:
+        json.dump(raw, f, indent=2)
+
+
 def find_delta_rate(rate_table: dict, category: str, grn_date: datetime):
     """Return (delta_rate, effective_from) for the applicable quarter, or (None, None)."""
     entries = rate_table.get(str(category).upper())
