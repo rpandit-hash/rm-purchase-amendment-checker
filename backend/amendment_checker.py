@@ -29,15 +29,24 @@ REQUIRED_COLUMNS = [
 
 
 def load_rate_table(path: str = RATES_FILE) -> dict:
-    """Load the delta-rate JSON config. Shape: {"CR": {"delta_rate": 1.375, "grades": [...]}, "HR": {...}}"""
+    """Load the delta-rate JSON config.
+
+    Each category's value is a list of rate-revision entries (each with
+    "effective_from", "delta_rate", "grades"), e.g.
+    {"CR": [{"effective_from": "2026-01-01", "delta_rate": 1.375, "grades": [...]}], "HR": [...]}.
+    Only the single most recent entry (by "effective_from") per category is
+    used - there is one current rate per category, applied to every row
+    regardless of date (see module docstring).
+    """
     with open(path, "r") as f:
         raw = json.load(f)
 
     table = {}
-    for category, entry in raw.items():
+    for category, entries in raw.items():
+        latest = max(entries, key=lambda e: e["effective_from"])
         table[category.upper()] = {
-            "delta_rate": float(entry["delta_rate"]),
-            "grades": entry.get("grades", []),  # documentation only, not used in lookup
+            "delta_rate": float(latest["delta_rate"]),
+            "grades": latest.get("grades", []),  # documentation only, not used in lookup
         }
     return table
 
@@ -49,13 +58,14 @@ def get_current_rate(rate_table: dict, category: str):
 
 
 def save_new_rate(category: str, new_delta_rate: float, path: str = RATES_FILE) -> None:
-    """Update the current delta rate for a category and write it back to rm_delta_rates.json."""
+    """Update the current (most recent) delta rate for a category and write it back to rm_delta_rates.json."""
     category = str(category).upper()
     with open(path, "r") as f:
         raw = json.load(f)
 
-    raw.setdefault(category, {"grades": []})
-    raw[category]["delta_rate"] = float(new_delta_rate)
+    entries = raw.setdefault(category, [{"effective_from": "1970-01-01", "grades": []}])
+    latest = max(entries, key=lambda e: e["effective_from"])
+    latest["delta_rate"] = float(new_delta_rate)
 
     with open(path, "w") as f:
         json.dump(raw, f, indent=2)
